@@ -1,0 +1,105 @@
+name: SonarQube (Maven)
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        description: "JDK version (Temurin) used to build and analyze"
+        required: false
+        type: string
+        default: "21"
+      sonar-main-branch:
+        description: "Branch considered the mainline for SonarQube scan arguments"
+        required: false
+        type: string
+        default: "develop"
+      sonar-host-url:
+        description: "SonarQube URL reachable from the runner (cluster-local)"
+        required: false
+        type: string
+        default: ""
+      sonar-public-url:
+        description: "Public SonarQube URL (used when no self-hosted runner is passed)"
+        required: false
+        type: string
+        default: ""
+      sonar-runner:
+        description: "runs-on label for the analysis job (empty = ubuntu-latest)"
+        required: false
+        type: string
+        default: ""
+      build-command:
+        description: "Maven command to build, test and analyze"
+        required: false
+        type: string
+        default: "./mvnw -B clean verify sonar:sonar -Psonar"
+    secrets:
+      SONAR_TOKEN:
+        description: "SonarQube analysis token"
+        required: true
+      SONAR_URL:
+        description: "SonarQube base URL exposed to the Maven plugin"
+        required: true
+
+jobs:
+  sonarqube:
+    name: Analyze with SonarQube
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      inputs.sonar-host-url != '' ||
+      inputs.sonar-public-url != ''
+    runs-on: ${{ inputs.sonar-runner || 'ubuntu-latest' }}
+    env:
+      SONAR_HOST_URL: ${{ inputs.sonar-runner && inputs.sonar-host-url || inputs.sonar-public-url || inputs.sonar-host-url }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_RUNNER: ${{ inputs.sonar-runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: ${{ inputs.java-version }}
+          cache: 'maven'
+
+      - name: Validate SonarQube configuration
+        run: |
+          if [ -z "$SONAR_HOST_URL" ]; then
+            echo "::error::Pass sonar-host-url or sonar-public-url to the reusable workflow."
+            exit 1
+          fi
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo "::error::Pass the SONAR_TOKEN secret to the reusable workflow."
+            exit 1
+          fi
+          if [ -z "$SONAR_RUNNER" ] && [[ "$SONAR_HOST_URL" == *"svc.cluster.local"* ]]; then
+            echo "::error::SonarQube URL is cluster-local. Pass sonar-runner (in-cluster self-hosted runner) or sonar-public-url (ingress/load-balancer URL)."
+            exit 1
+          fi
+
+      - name: Prepare SonarQube analysis target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.number }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+          REF_NAME: ${{ github.ref_name }}
+          MAIN_BRANCH: ${{ inputs.sonar-main-branch }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "SONAR_SCAN_ARGS=-Dsonar.pullRequest.key=$PR_NUMBER -Dsonar.pullRequest.branch=$HEAD_REF -Dsonar.pullRequest.base=$BASE_REF -Dsonar.projectVersion=$COMMIT_SHA" >> "$GITHUB_ENV"
+          elif [ "$REF_NAME" = "$MAIN_BRANCH" ]; then
+            echo "SONAR_SCAN_ARGS=-Dsonar.projectVersion=$COMMIT_SHA" >> "$GITHUB_ENV"
+          else
+            echo "SONAR_SCAN_ARGS=-Dsonar.branch.name=$REF_NAME -Dsonar.projectVersion=$COMMIT_SHA" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build, test and analyze
+        env:
+          SONAR_URL: ${{ env.SONAR_HOST_URL }}
+        run: ${{ inputs.build-command }} ${SONAR_SCAN_ARGS}
