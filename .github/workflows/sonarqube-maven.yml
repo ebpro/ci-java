@@ -7,7 +7,7 @@ on:
         description: "JDK version (Temurin) used to build and analyze"
         required: false
         type: string
-        default: "21"
+        default: "25"
       sonar-main-branch:
         description: "Branch considered the mainline for SonarQube scan arguments"
         required: false
@@ -55,12 +55,12 @@ jobs:
       SONAR_RUNNER: ${{ inputs.sonar-runner }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: ${{ inputs.java-version }}
